@@ -13,19 +13,19 @@
 
 #define DEG2RAD(deg) ((deg) * M_PI / 180.0)
 #define RAD2DEG(rad) ((rad) * 180.0 / M_PI)
-#define DELAY_IDLE          (20U)   // sleep used when not tracking
-#define DELAY_FIRST_UPDATE  (5000U) // absolute delay before first servo update
-#define FONT_W              (6)     // Actually 5x7 + 1 pixel space
+#define DELAY_IDLE          (20U)   // 未跟踪时使用的延时
+#define DELAY_FIRST_UPDATE  (5000U) // 首次舵机更新前的绝对延时
+#define FONT_W              (6)     // 实际为5x7 + 1像素空间
 #define FONT_H              (8)
 
 static void calcDistAndAzimuth(int32_t srcLat, int32_t srcLon, int32_t dstLat, int32_t dstLon,
     uint32_t *out_dist, uint32_t *out_azimuth)
 {
-    // https://www.movable-type.co.uk/scripts/latlong.html
-    // https://www.igismap.com/formula-to-find-bearing-or-heading-angle-between-two-points-latitude-longitude/
+    // 参考: https://www.movable-type.co.uk/scripts/latlong.html
+    // 参考: https://www.igismap.com/formula-to-find-bearing-or-heading-angle-between-two-points-latitude-longitude/
 
-    // Have to use doubles for at least some of these, due to short distances getting rounded
-    // particularly cos(deltaLon) for <2000 m rounds to 1.0000000000
+    // 必须使用double类型，因为短距离计算时会出现舍入问题
+    // 特别是当距离小于2000米时，cos(deltaLon)会被舍入为1.0000000000
     double deltaLon = DEG2RAD((float)(dstLon - srcLon) / 1e7);
     double thetaA = DEG2RAD((float)srcLat / 1e7);
     double thetaB = DEG2RAD((float)dstLat / 1e7);
@@ -48,7 +48,7 @@ static void calcDistAndAzimuth(int32_t srcLat, int32_t srcLon, int32_t dstLat, i
         double X = cosThetaB * sinDeltaLon;
         double Y = cosThetaA * sinThetaB - sinThetaA * cosThetaB * cosDeltaLon;
 
-        // Convert to degrees, normalized to 0-360
+        // 转换为角度，并归一化到0-360度
         uint32_t hdg = RAD2DEG(atan2(X, Y));
         *out_azimuth = (hdg + 360) % 360;
     }
@@ -77,7 +77,7 @@ void VbatSampler::update(uint32_t now)
     if (_cnt >= VBAT_UPDATE_COUNT)
     {
         adc = _sum / _cnt;
-        // For negative offsets, anything between abs(OFFSET) and 0 is considered 0
+        // 对于负偏移，abs(OFFSET)和0之间的任何值都被视为0
         if ((config.GetVbatOffset() < 0 && (int32_t)adc <= -config.GetVbatOffset())
             || config.GetVbatScale() == 0)
             _value = 0;
@@ -104,13 +104,13 @@ AatModule::AatModule(Stream &port) :
     , _display(SCREEN_WIDTH, SCREEN_HEIGHT), _lastDisplayActiveMs(0)
 #endif
 {
-    // Init is called manually
+    // 手动调用Init
 }
 
 void AatModule::Init()
 {
 #if !defined(DEBUG_LOG)
-    // Need to call _port's end but it is a stream reference not the HardwareSerial
+    // 需要调用_port的end，但它是一个stream引用而不是HardwareSerial
     Serial.end();
 #endif
     _servoPos[IDX_AZIM] = (config.GetAatServoLow(IDX_AZIM) + config.GetAatServoHigh(IDX_AZIM)) / 2;
@@ -144,11 +144,11 @@ void AatModule::SendGpsTelemetry(crsf_packet_gps_t *packet)
 
 void AatModule::updateGpsInterval(uint32_t interval)
 {
-    // Low pass filter. Note there is no fast init of the average, so it will take some time to grow
-    // this prevents overprojection caused by the first update after setting home
+    // 低通滤波。注意平均值没有快速初始化，所以需要一些时间来增长
+    // 这可以防止在设置home位置后的第一次更新导致的过度预测
     _gpsAvgUpdateIntervalMs += ((int32_t)interval - (int32_t)_gpsAvgUpdateIntervalMs) / 4;
 
-    // Limit the maximum interval to provent projecting for too long
+    // 限制最大间隔以防止预测时间过长
     const uint32_t GPS_UPDATE_INTERVAL_MAX = (10U * 1000U);
     if (_gpsAvgUpdateIntervalMs > GPS_UPDATE_INTERVAL_MAX)
         _gpsAvgUpdateIntervalMs = GPS_UPDATE_INTERVAL_MAX;
@@ -170,11 +170,11 @@ void AatModule::processGps(uint32_t now)
         return;
     _gpsLast.updated = false;
 
-    // Actually want to track time between _processing_ each GPS update
+    // 实际上要跟踪每次GPS更新处理之间的时间
     uint32_t interval = now - _gpsLast.lastUpdateMs;
     _gpsLast.lastUpdateMs = now;
 
-    // Check if need to set home position
+    // 检查是否需要设置home位置
     bool didSetHome = false;
     if (!isHomeSet())
     {
@@ -184,7 +184,7 @@ void AatModule::processGps(uint32_t now)
             _home.lat = _gpsLast.lat;
             _home.lon = _gpsLast.lon;
             _home.alt = _gpsLast.altitude;
-            DBGLN("GPS Home set to (%d,%d)", _home.lat, _home.lon);
+            DBGLN("GPS Home设置为 (%d,%d)", _home.lat, _home.lon);
         }
         else
             return;
@@ -194,16 +194,16 @@ void AatModule::processGps(uint32_t now)
     uint32_t distance;
     calcDistAndAzimuth(_home.lat, _home.lon, _gpsLast.lat, _gpsLast.lon, &distance, &azimuth);
     uint8_t elevation = constrain(calcElevation(distance, _gpsLast.altitude - _home.alt), 0, 90);
-    DBGLN("Azimuth: %udeg Elevation: %udeg Distance: %um", azimuth, elevation, distance);
+    DBGLN("方位角: %udeg 仰角: %udeg 距离: %um", azimuth, elevation, distance);
 
-    // Calculate angular velocity to allow dead reckoning projection
+    // 计算角速度以允许航位推算预测
     if (!didSetHome)
     {
         updateGpsInterval(interval);
-        // azimDelta is the azimuth change since the last packet, -180 to +180
+        // azimDelta是自上次数据包以来的方位角变化，范围-180到+180
         int32_t azimDelta = (azimuth - _targetAzim + 540) % 360 - 180;
         _azimMsPerDegree = (azimDelta == 0) ? 0 : (int32_t)interval / azimDelta;
-        DBGLN("%d delta in %ums, %dms/d %uavg", azimDelta, interval, _azimMsPerDegree, _gpsAvgUpdateIntervalMs);
+        DBGLN("%d delta在%ums内，%dms/d %uavg", azimDelta, interval, _azimMsPerDegree, _gpsAvgUpdateIntervalMs);
     }
 
     _targetDistance = distance;
@@ -213,13 +213,13 @@ void AatModule::processGps(uint32_t now)
 
 int32_t AatModule::calcProjectedAzim(uint32_t now)
 {
-    // Attempt to do a linear projection of the last
-    // If enabled, we know the GPS update rate, the azimuth has changed, and more than a few meters away
+    // 尝试对最后一次进行线性预测
+    // 如果启用，我们知道GPS更新率，方位角已改变，且距离超过几米
     if (config.GetAatProject() && _gpsAvgUpdateIntervalMs && _azimMsPerDegree && _targetDistance > 3)
     {
         uint32_t elapsed = constrain(now - _gpsLast.lastUpdateMs, 0U, _gpsAvgUpdateIntervalMs);
 
-        // Prevent excessive rotational velocity (100 degrees per second / 10ms per degree)
+        // 防止过度旋转速度（每秒100度/每度10ms）
         int32_t azimMsPDLimited;
         if (_azimMsPerDegree > -10 && _azimMsPerDegree < 10)
             if (_azimMsPerDegree > 0)
@@ -238,13 +238,13 @@ int32_t AatModule::calcProjectedAzim(uint32_t now)
 }
 
 /**
- * @brief: Calculate the bearing from centerdir to azim
- * @return: -180 to +179 bearing
+ * @brief: 计算从中心方向到方位角的方位
+ * @return: -180到+179的方位
 */
 const int32_t AatModule::azimToBearing(int32_t azim) const
 {
     int32_t center = 45 * config.GetAatCenterDir();
-    return ((azim - center + 540) % 360) - 180;  // -180 to +179
+    return ((azim - center + 540) % 360) - 180;  // -180到+179
 }
 
 #if defined(PIN_OLED_SDA)
@@ -258,18 +258,18 @@ void AatModule::displayInit()
 
 void AatModule::displayState()
 {
-    // Boot screen with vbat, version, and bind/wifi state
+    // 启动屏幕显示电池电压、版本和绑定/wifi状态
     _display.clearDisplay();
     _display.setTextSize(2);
     _display.setTextColor(SSD1306_WHITE);
     _display.setCursor(0, 0);
     if (connectionState == binding)
     {
-        _display.write("Bind\nmode...\n\n");
+        _display.write("绑定\n模式...\n\n");
     }
     else if (connectionState == wifiUpdate)
     {
-        _display.write("Wifi\nmode...\n");
+        _display.write("Wifi\n模式...\n");
         _display.setTextSize(1);
         IPAddress localAddr;
         if (WiFi.getMode() == WIFI_STA)
@@ -291,15 +291,15 @@ void AatModule::displayState()
 
 void AatModule::displayGpsIdle(uint32_t now)
 {
-    // A screen with just the GPS position, sat count, vbat, and interval bar
+    // 显示GPS位置、卫星数量、电池电压和间隔条的屏幕
     _display.clearDisplay();
     _display.setCursor(0, 0);
 
     _display.setTextSize(2);
-    _display.printf("Sats: %u\n",  _gpsLast.satcnt);
+    _display.printf("卫星: %u\n",  _gpsLast.satcnt);
 
     _display.setTextSize(1);
-    _display.printf("\nLat: %d.%07d\nLon: %d.%07d",
+    _display.printf("\n纬度: %d.%07d\n经度: %d.%07d",
         _gpsLast.lat / 10000000, abs(_gpsLast.lat) % 10000000,
         _gpsLast.lon / 10000000, abs(_gpsLast.lon) % 10000000
     );
@@ -313,7 +313,7 @@ void AatModule::displayAzimuthExtent(int32_t y)
 {
     switch ((ServoMode)config.GetAatServoMode())
     {
-        // Just a line on the left / right of the azim line
+        // 在方位角线的左侧/右侧画一条线
         default: /* fallthrough */
         case ServoMode::TwoToOne: /* fallthrough */
         case ServoMode::Flip180:
@@ -321,11 +321,11 @@ void AatModule::displayAzimuthExtent(int32_t y)
             _display.drawFastVLine(SCREEN_WIDTH-1, y, 5, SSD1306_WHITE);
             break;
 
-        // 180 mode put the lines at the extent of the servo rotation
+        // 180度模式在舵机旋转极限处画线
         case ServoMode::Clip180:
             //_display.drawFastVLine(SCREEN_WIDTH/4, y, 5, SSD1306_WHITE);
             //_display.drawFastVLine(3*SCREEN_WIDTH/4, y, 5, SSD1306_WHITE);
-            // Dotted line all the way up the elevation field
+            // 在整个仰角区域画虚线
             for (int32_t dotY=0; dotY<(33+5); dotY+=4)
             {
                 _display.drawPixel(SCREEN_WIDTH/4, dotY+16, SSD1306_WHITE);
@@ -339,22 +339,22 @@ void AatModule::displayAzimuth(int32_t projectedAzim)
 {
     int32_t y = SCREEN_HEIGHT - FONT_H + 1 - 6;
 
-    // horizon line + arrow + unprojected azim line
+    // 地平线 + 箭头 + 未预测方位角线
     // |-----/\---|-|
     _display.drawFastHLine(0, y+2, SCREEN_WIDTH-1, SSD1306_WHITE);
     displayAzimuthExtent(y);
 
-    // Unprojected azimuth line
+    // 未预测方位角线
     int32_t azimPos = map(azimToBearing(_targetAzim), -180, 180, 0, SCREEN_WIDTH);
     _display.drawFastVLine(azimPos, y+1, 3, SSD1306_WHITE);
-    // Projected Azimuth arrow
+    // 预测方位角箭头
     azimPos = map(azimToBearing(projectedAzim), -180, 180, 0, SCREEN_WIDTH);
-    const uint8_t oledim_arrowup[] = { 0x10, 0x38, 0x7c }; // 'arrowup', 7x3px
+    const uint8_t oledim_arrowup[] = { 0x10, 0x38, 0x7c }; // 'arrowup', 7x3像素
     _display.drawBitmap(azimPos-7/2, y+1, oledim_arrowup, 7, 3, SSD1306_WHITE, SSD1306_BLACK);
 
-    // S    W    N    E    S under that
+    // 在下方显示 S    W    N    E    S
     y += 6;
-    const char AZIM_LABELS[] = "SWNES" "WNESW" "NESWN" "ESWNE"; // 5 characters for each direction, 3rd character = center
+    const char AZIM_LABELS[] = "SWNES" "WNESW" "NESWN" "ESWNE"; // 每个方向5个字符，第3个字符=中心
     const char *labels = &AZIM_LABELS[config.GetAatCenterDir()*5/2];
     _display.drawChar(0, y, labels[0], SSD1306_WHITE, SSD1306_BLACK, 1);
     _display.drawChar(SCREEN_WIDTH/4-FONT_W/2, y, labels[1], SSD1306_WHITE, SSD1306_BLACK, 1);
@@ -362,7 +362,7 @@ void AatModule::displayAzimuth(int32_t projectedAzim)
     _display.drawChar(3*SCREEN_WIDTH/4-FONT_W/2, y, labels[3], SSD1306_WHITE, SSD1306_BLACK, 1);
     _display.drawChar(SCREEN_WIDTH-FONT_W+1, y, labels[4], SSD1306_WHITE, SSD1306_BLACK, 1);
 
-    // Projected azim value as 3 digit number on a white background (max 2px each side)
+    // 在白色背景上显示预测方位角值作为3位数字（每边最多2像素）
     y -= 2;
     uint32_t azimStart = constrain(azimPos-((3*FONT_W)/2), -2, SCREEN_WIDTH-(3*FONT_W)-2);
     _display.fillRoundRect(azimStart, y, 3*FONT_W + 3, FONT_H + 1, 2, SSD1306_WHITE);
@@ -381,8 +381,8 @@ void AatModule::displayAltitude(int32_t azimPos, int32_t elevPos)
     char buf[16];
     snprintf(buf, sizeof(buf), "%dm", alt);
 
-    // If elevation is low, put alt over the pip, if elev high put the alt below it
-    // and allow the units to go off the screen to the right if needed
+    // 如果仰角低，将高度显示在点的上方，如果仰角高则显示在下方
+    // 允许单位在需要时超出屏幕右侧
     int32_t strWidth = strlen(buf) * FONT_W;
     int32_t distX = constrain(azimPos - (strWidth/2) + 1, 0, SCREEN_WIDTH + FONT_W - strWidth);
     int32_t distY = (_targetElev < 50) ? elevPos - FONT_H - 5 : elevPos + 6;
@@ -394,15 +394,15 @@ void AatModule::displayAltitude(int32_t azimPos, int32_t elevPos)
 void AatModule::displayTargetCircle(int32_t projectedAzim)
 {
     const int32_t elevH = 33;
-    // yellow-blue OLED have 16 pixels of yellow, start below that
+    // 黄蓝OLED有16像素的黄色，从下方开始
     const int32_t elevOff = 16;
-    // Dotted line to separate top of screen from tracking area
+    // 虚线分隔屏幕顶部和跟踪区域
     for (int32_t x=0; x<SCREEN_WIDTH; x+=3)
         _display.drawPixel(x, elevOff, SSD1306_WHITE);
 
     int32_t elevPos = map(_targetElev, 0, 90, elevH, 0) + elevOff;
     //elevPos = 0 + elevOff;
-    // X for projectedAzim
+    // 预测方位角的X标记
     int32_t azimPos = map(azimToBearing(projectedAzim), -180, 180, 0, SCREEN_WIDTH);
     _display.drawPixel(azimPos-1, elevPos-1, SSD1306_WHITE);
     _display.drawPixel(azimPos+1, elevPos-1, SSD1306_WHITE);
@@ -410,7 +410,7 @@ void AatModule::displayTargetCircle(int32_t projectedAzim)
     _display.drawPixel(azimPos-1, elevPos+1, SSD1306_WHITE);
     _display.drawPixel(azimPos+1, elevPos+1, SSD1306_WHITE);
 
-    // circle/rectangle cage for _servoPos
+    // 为_servoPos画圆/矩形笼
     int32_t servoXMin = ((ServoMode)config.GetAatServoMode() == ServoMode::Clip180) ? (SCREEN_WIDTH/4) : 0;
     int32_t servoXMax = ((ServoMode)config.GetAatServoMode() == ServoMode::Clip180) ? (3*SCREEN_WIDTH/4) : SCREEN_WIDTH;
     int32_t servoX = map(_servoPos[IDX_AZIM],
@@ -430,20 +430,20 @@ void AatModule::displayTargetCircle(int32_t projectedAzim)
 
 void AatModule::displayTargetDistance()
 {
-    // Target distance over the X: 9m, 99m, 999m, 9.9k, 99.9k, 999k
+    // 在X上方显示目标距离：9m、99m、999m、9.9k、99.9k、999k
     char dist[16];
     const char *units;
-    if (_targetDistance > 99999) // >99.99m = "xxx.x" (5 chars)
+    if (_targetDistance > 99999) // >99.99m = "xxx.x" (5个字符)
     {
         snprintf(dist, sizeof(dist), "%u.%u", _targetDistance / 1000, (_targetDistance % 1000) / 100);
         units = "km";
     }
-    else if (_targetDistance > 999) // >999m = "[x]x.xx" (4-5 chars)
+    else if (_targetDistance > 999) // >999m = "[x]x.xx" (4-5个字符)
     {
         snprintf(dist, sizeof(dist), "%u.%02u", _targetDistance / 1000, (_targetDistance % 1000) / 10);
         units = "km";
     }
-    else // "[x]xx" (2-3 chars)
+    else // "[x]xx" (2-3个字符)
     {
         snprintf(dist, sizeof(dist), "%2u", _targetDistance);
         units = "m";
@@ -451,7 +451,7 @@ void AatModule::displayTargetDistance()
     _display.setTextColor(SSD1306_WHITE);
     _display.setTextSize(1);
     _display.setCursor(0, 0);
-    _display.write("Dst");
+    _display.write("距离");
     _display.setTextSize(2);
     _display.setCursor(3 * FONT_W + 3, 0);
     _display.printf(dist);
@@ -474,7 +474,7 @@ void AatModule::displayVBat()
 
 void AatModule::displayActive(uint32_t now, int32_t projectedAzim)
 {
-    // Throttle the dislay update rate to <60Hz as the tracker runs 100Hz
+    // 将显示更新率限制在<60Hz，因为跟踪器运行在100Hz
     const uint32_t DISPLAY_UPDATE_MS = 16;
     if (now - _lastDisplayActiveMs < DISPLAY_UPDATE_MS)
         return;
@@ -498,7 +498,7 @@ void AatModule::displayGpsIntervalBar(uint32_t now)
 
     if (now - _gpsLast.lastUpdateMs > (3*_gpsAvgUpdateIntervalMs))
     {
-        // Inverse "OLD" in the center of where the update bar would be
+        // 在更新条应该在的位置的中心显示反向的"OLD"
         _display.fillRoundRect(80, 0, SCREEN_WIDTH-1-80, FONT_H-1, 2, SSD1306_WHITE);
         _display.setTextSize(1);
         _display.setTextColor(SSD1306_BLACK);
@@ -507,7 +507,7 @@ void AatModule::displayGpsIntervalBar(uint32_t now)
     }
     else
     {
-        // A depleting bar going from screen center to right
+        // 从屏幕中心到右侧的消耗条
         uint8_t gpsIntervalPct = calcGpsIntervalPct(now);
         uint8_t pxWidth = (SCREEN_WIDTH-1-80) * (100U - gpsIntervalPct) / 100U;
         _display.fillRect(SCREEN_WIDTH-pxWidth, 0, pxWidth, 2, SSD1306_WHITE);
@@ -519,7 +519,7 @@ void AatModule::servoApplyMode(int32_t azim, int32_t elev, int32_t newServoPos[]
 {
     int32_t bearing = azimToBearing(azim);
 
-    // 2-to-1 reduction can do 360 so the input and output is the same
+    // 2:1减速比可以做360度，所以输入和输出相同
     if ((ServoMode)config.GetAatServoMode() == ServoMode::TwoToOne)
     {
         newServoPos[IDX_AZIM] = map(bearing, -180, 179, config.GetAatServoLow(IDX_AZIM), config.GetAatServoHigh(IDX_AZIM));
@@ -527,7 +527,7 @@ void AatModule::servoApplyMode(int32_t azim, int32_t elev, int32_t newServoPos[]
         return;
     }
 
-    // Clip180 limits azim to 90 degrees left/right from center
+    // Clip180将方位角限制在中心左右90度范围内
     if ((ServoMode)config.GetAatServoMode() == ServoMode::Clip180)
     {
         bearing = constrain(bearing, -90, 90);
@@ -561,7 +561,7 @@ void AatModule::servoUpdate(uint32_t now)
         return;
     _lastServoUpdateMs = now;
 
-    // If the servo endpoints aren't valid, all this math will divide by zero all over
+    // 如果舵机端点无效，所有这些数学计算都会导致除零
     if (!config.GetAatServoEndpointsValid())
         return;
 
@@ -571,17 +571,17 @@ void AatModule::servoUpdate(uint32_t now)
 
     for (uint32_t idx=IDX_AZIM; idx<IDX_COUNT; ++idx)
     {
-        // Use smoothness to denote the maximum us per 10ms update
+        // 使用平滑度表示每10ms更新的最大微秒数
         const int32_t SMOOTHNESS_US_PER_STEP = (config.GetAatServoSmooth() < 3) ? 6 : 4;
         int32_t range = (config.GetAatServoHigh(idx) - config.GetAatServoLow(idx));
         int32_t diff = newServoPos[idx] - _servoPos[idx];
         int32_t maxDiff = (10 - config.GetAatServoSmooth()) * SMOOTHNESS_US_PER_STEP;
-        // If the distance the servo needs to go is more than 80% away
-        // jump immediately. otherwise smooth it
+        // 如果舵机需要移动的距离超过80%
+        // 立即跳转，否则平滑移动
         if (config.GetAatAzimuthServoFastFlip() && idx == IDX_AZIM && (abs(diff) * 100 / range) > 80)
         {
-            // Prevent the servo from flipping back and forth around the 180 point
-            // by only allowing 1 flip ever Xms. Just keep pushing toward the limit
+            // 通过在180度点周围只允许每Xms翻转一次来防止舵机来回翻转
+            // 继续向极限推进
             const uint32_t AZIM_FLIP_MIN_DELAY = 2000U;
             if (now - _lastAzimFlipMs > AZIM_FLIP_MIN_DELAY)
             {
@@ -620,7 +620,7 @@ void AatModule::overrideTargetCommon(int32_t azimuth, int32_t elevation)
     _targetAzim = azimuth;
     _targetElev = elevation;
 
-    // Clear out other fields to not do projection or process any updates
+    // 清除其他字段以不进行预测或处理任何更新
     _isOverrideMode = true;
     _gpsAvgUpdateIntervalMs = 0;
     _targetDistance = 0;
@@ -629,9 +629,9 @@ void AatModule::overrideTargetCommon(int32_t azimuth, int32_t elevation)
 
 void AatModule::overrideTargetBearing(int32_t bearing)
 {
-    // bearing is -180 to +180, azimuth 0-360
+    // bearing是-180到+180，azimuth是0-360
     int32_t azim = (360 + bearing + (45 * config.GetAatCenterDir())) % 360;
-    // The furthest right a servo can go is +179 degrees, +180 goes to the -180 position
+    // 舵机最右位置是+179度，+180度转到-180度位置
     if (bearing == 180)
         azim = (azim == 0) ? 359 : azim - 1;
     overrideTargetCommon(azim, _targetElev);

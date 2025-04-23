@@ -10,6 +10,11 @@
 #include <ESPmDNS.h>
 #include <Update.h>
 #include <esp_wifi.h>
+// 使用BLE相关库
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #else
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -106,6 +111,43 @@ IPAddress gcsIP;
 bool gcsIPSet = false;
 #endif
 
+#if defined(TARGET_TX_BACKPACK)
+// UDP for CRSF telemetry
+WiFiUDP crsfUDP;
+IPAddress crsfRemoteIP;
+bool crsfIPSet = false;
+static const uint16_t CRSF_UDP_PORT = 14551; // 默认UDP端口
+static const unsigned long CRSF_TELEM_TIMEOUT = 100; // 发送超时时间，单位毫秒
+
+#if defined(PLATFORM_ESP32)
+// BLE相关定义
+bool bleInitialized = false;
+static const char* BLE_DEVICE_NAME = "RunCamFly";
+
+// 为CRSF遥测数据定义UUID
+#define CRSF_SERVICE_UUID        "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CRSF_CHARACTERISTIC_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+
+// BLE服务器回调
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+      DBGLN("BLE客户端已连接");
+    };
+
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+      DBGLN("BLE客户端已断开连接");
+    }
+};
+#endif
+#endif
+
 /** Is this an IP? */
 static boolean isIp(String str)
 {
@@ -145,23 +187,26 @@ static bool captivePortal(AsyncWebServerRequest *request)
   return false;
 }
 
-static struct {
+static struct
+{
   const char *url;
   const char *contentType;
-  const uint8_t* content;
+  const uint8_t *content;
   const size_t size;
 } files[] = {
-  {"/mui.css", "text/css", (uint8_t *)MUI_CSS, sizeof(MUI_CSS)},
-  {"/elrs.css", "text/css", (uint8_t *)ELRS_CSS, sizeof(ELRS_CSS)},
-  {"/mui.js", "text/javascript", (uint8_t *)MUI_JS, sizeof(MUI_JS)},
-  {"/scan.js", "text/javascript", (uint8_t *)SCAN_JS, sizeof(SCAN_JS)},
-  {"/logo.svg", "image/svg+xml", (uint8_t *)LOGO_SVG, sizeof(LOGO_SVG)},
+    {"/mui.css", "text/css", (uint8_t *)MUI_CSS, sizeof(MUI_CSS)},
+    {"/elrs.css", "text/css", (uint8_t *)ELRS_CSS, sizeof(ELRS_CSS)},
+    {"/mui.js", "text/javascript", (uint8_t *)MUI_JS, sizeof(MUI_JS)},
+    {"/scan.js", "text/javascript", (uint8_t *)SCAN_JS, sizeof(SCAN_JS)},
+    {"/logo.svg", "image/svg+xml", (uint8_t *)LOGO_SVG, sizeof(LOGO_SVG)},
 };
 
 static void WebUpdateSendContent(AsyncWebServerRequest *request)
 {
-  for (size_t i=0 ; i<ARRAY_SIZE(files) ; i++) {
-    if (request->url().equals(files[i].url)) {
+  for (size_t i = 0; i < ARRAY_SIZE(files); i++)
+  {
+    if (request->url().equals(files[i].url))
+    {
       AsyncWebServerResponse *response = request->beginResponse_P(200, files[i].contentType, files[i].content, files[i].size);
       response->addHeader("Content-Encoding", "gzip");
       request->send(response);
@@ -178,7 +223,7 @@ static void WebUpdateHandleRoot(AsyncWebServerRequest *request)
     return;
   }
   force_update = request->hasArg("force");
-  AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", (uint8_t*)INDEX_HTML, sizeof(INDEX_HTML));
+  AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", (uint8_t *)INDEX_HTML, sizeof(INDEX_HTML));
   response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   response->addHeader("Pragma", "no-cache");
   response->addHeader("Expires", "-1");
@@ -205,27 +250,34 @@ static void GetConfiguration(AsyncWebServerRequest *request)
 static void WebUpdateSendNetworks(AsyncWebServerRequest *request)
 {
   int numNetworks = WiFi.scanComplete();
-  if (numNetworks >= 0) {
+  if (numNetworks >= 0)
+  {
     DBGLN("Found %d networks", numNetworks);
     std::set<String> vs;
-    String s="[";
-    for(int i=0 ; i<numNetworks ; i++) {
+    String s = "[";
+    for (int i = 0; i < numNetworks; i++)
+    {
       String w = WiFi.SSID(i);
       DBGLN("found %s", w.c_str());
-      if (vs.find(w)==vs.end() && w.length()>0) {
-        if (!vs.empty()) s += ",";
+      if (vs.find(w) == vs.end() && w.length() > 0)
+      {
+        if (!vs.empty())
+          s += ",";
         s += "\"" + w + "\"";
         vs.insert(w);
       }
     }
-    s+="]";
+    s += "]";
     request->send(200, "application/json", s);
-  } else {
+  }
+  else
+  {
     request->send(204, "application/json", "[]");
   }
 }
 
-static void sendResponse(AsyncWebServerRequest *request, const String &msg, const String &type = "text/plain") {
+static void sendResponse(AsyncWebServerRequest *request, const String &msg, const String &type = "text/plain")
+{
   AsyncWebServerResponse *response = request->beginResponse(200, type, msg);
   response->addHeader("Connection", "close");
   request->send(response);
@@ -233,7 +285,8 @@ static void sendResponse(AsyncWebServerRequest *request, const String &msg, cons
   changeTime = millis();
 }
 
-static void changeWifiMode(WiFiMode_t mode){
+static void changeWifiMode(WiFiMode_t mode)
+{
   changeMode = mode;
 }
 
@@ -249,7 +302,7 @@ static void WebUpdateConnect(AsyncWebServerRequest *request)
 {
   DBGLN("Connecting to home network");
   String msg = String("Connecting to network '") + station_ssid + "', connect to http://" +
-    myHostname + ".local from a browser on that network";
+               myHostname + ".local from a browser on that network";
   sendResponse(request, msg);
   changeWifiMode(WIFI_STA);
 }
@@ -263,7 +316,8 @@ static void WebUpdateSetHome(AsyncWebServerRequest *request)
   strcpy(station_ssid, ssid.c_str());
   strcpy(station_password, password.c_str());
   // Only save to config if we don't have a flashed wifi network
-  if (firmwareOptions.home_wifi_ssid[0] == 0) {
+  if (firmwareOptions.home_wifi_ssid[0] == 0)
+  {
     config.SetSSID(ssid.c_str());
     config.SetPassword(password.c_str());
     config.Commit();
@@ -278,15 +332,16 @@ static void WebUpdateForget(AsyncWebServerRequest *request)
   config.SetPassword("");
   config.Commit();
   // If we have a flashed wifi network then let's try reconnecting to that otherwise start an access point
-  if (firmwareOptions.home_wifi_ssid[0] != 0) {
+  if (firmwareOptions.home_wifi_ssid[0] != 0)
+  {
     strcpy(station_ssid, firmwareOptions.home_wifi_ssid);
     strcpy(station_password, firmwareOptions.home_wifi_password);
     String msg = String("Temporary network forgotten, attempting to connect to network '") + station_ssid + "'";
     sendResponse(request, msg);
     changeWifiMode(WIFI_STA);
-    
   }
-  else {
+  else
+  {
     station_ssid[0] = 0;
     station_password[0] = 0;
     String msg = String("Home network forgotten, please connect to access point '") + wifi_ap_ssid + "' with password '" + wifi_ap_password + "'";
@@ -321,8 +376,10 @@ static void WebUpdateHandleNotFound(AsyncWebServerRequest *request)
   request->send(response);
 }
 
-static void WebUploadResponseHandler(AsyncWebServerRequest *request) {
-  if (updater.hasError()) {
+static void WebUploadResponseHandler(AsyncWebServerRequest *request)
+{
+  if (updater.hasError())
+  {
     StreamString p = StreamString();
     updater.printError(p);
     p.trim();
@@ -331,17 +388,23 @@ static void WebUploadResponseHandler(AsyncWebServerRequest *request) {
     response->addHeader("Connection", "close");
     request->send(response);
     request->client()->close();
-  } else {
-    if (target_seen) {
+  }
+  else
+  {
+    if (target_seen)
+    {
       DBGLN("Update complete, rebooting");
       AsyncWebServerResponse *response = request->beginResponse(200, "application/json", R"({"status": "ok", "msg": "Update complete. Please wait for LED to turn on before disconnecting power."})");
       response->addHeader("Connection", "close");
       request->send(response);
       request->client()->close();
       do_flash = true;
-    } else {
+    }
+    else
+    {
       String message = String(R"({"status": "mismatch", "msg": "<b>Current target:</b> )") + (const char *)&target_name[4] + ".<br>";
-      if (target_found.length() != 0) {
+      if (target_found.length() != 0)
+      {
         message += "<b>Uploaded image:</b> " + target_found + ".<br/>";
       }
       message += "<br/>Flashing the wrong firmware may lock or damage your device.\"}";
@@ -350,52 +413,67 @@ static void WebUploadResponseHandler(AsyncWebServerRequest *request) {
   }
 }
 
-static void WebUploadDataHandler(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
-  if (index == 0) {
+static void WebUploadDataHandler(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
+{
+  if (index == 0)
+  {
     DBGLN("Update: %s, %s", filename.c_str(), request->arg("type").c_str());
     target_seen = false;
     target_found.clear();
     target_complete = false;
     target_pos = 0;
     totalSize = 0;
-    #if defined(PLATFORM_ESP8266)
-      updater.runAsync(true);
-      uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-      DBGLN("Free space = %u", maxSketchSpace);
-      if (!updater.begin(maxSketchSpace)){ //start with max available size
-        updater.printError(Serial);
-      }
-    #else
-      if (!updater.begin()) { //start with max available size
-        updater.printError(Serial);
-      }
-    #endif
+#if defined(PLATFORM_ESP8266)
+    updater.runAsync(true);
+    uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+    DBGLN("Free space = %u", maxSketchSpace);
+    if (!updater.begin(maxSketchSpace))
+    { // start with max available size
+      updater.printError(Serial);
+    }
+#else
+    if (!updater.begin())
+    { // start with max available size
+      updater.printError(Serial);
+    }
+#endif
   }
-  if (len) {
+  if (len)
+  {
     DBGVLN("writing %d", len);
-    if (updater.write(data, len) == len) {
+    if (updater.write(data, len) == len)
+    {
       if (force_update || (totalSize == 0 && *data == 0x1F)) // forced or gzipped image, we can't check
         target_seen = true;
-      if (!target_seen) {
-        for (size_t i=0 ; i<len ;i++) {
-          if (!target_complete && (target_pos >= 4 || target_found.length() > 0)) {
-            if (target_pos == 4) {
+      if (!target_seen)
+      {
+        for (size_t i = 0; i < len; i++)
+        {
+          if (!target_complete && (target_pos >= 4 || target_found.length() > 0))
+          {
+            if (target_pos == 4)
+            {
               target_found.clear();
             }
-            if (data[i] == 0 || target_found.length() > 50) {
+            if (data[i] == 0 || target_found.length() > 50)
+            {
               target_complete = true;
             }
-            else {
+            else
+            {
               target_found += (char)data[i];
             }
           }
-          if (data[i] == target_name[target_pos]) {
+          if (data[i] == target_name[target_pos])
+          {
             ++target_pos;
-            if (target_pos >= target_name_size) {
+            if (target_pos >= target_name_size)
+            {
               target_seen = true;
             }
           }
-          else {
+          else
+          {
             target_pos = 0; // Startover
           }
         }
@@ -405,20 +483,24 @@ static void WebUploadDataHandler(AsyncWebServerRequest *request, const String& f
   }
 }
 
-static void WebUploadForceUpdateHandler(AsyncWebServerRequest *request) {
+static void WebUploadForceUpdateHandler(AsyncWebServerRequest *request)
+{
   target_seen = true;
-  if (request->arg("action").equals("confirm")) {
+  if (request->arg("action").equals("confirm"))
+  {
     WebUploadResponseHandler(request);
   }
-  else {
-    #if defined(PLATFORM_ESP32)
-      updater.abort();
-    #endif
+  else
+  {
+#if defined(PLATFORM_ESP32)
+    updater.abort();
+#endif
     request->send(200, "application/json", R"({"status": "ok", "msg": "Update cancelled"})");
   }
 }
 
-static void WebUploadRTCUpdateHandler(AsyncWebServerRequest *request) {
+static void WebUploadRTCUpdateHandler(AsyncWebServerRequest *request)
+{
   static String ntpServer = request->arg("server");
   long offset = request->arg("offset").toInt();
   long dst = request->arg("dst") == "on" ? 3600 : 0;
@@ -429,10 +511,12 @@ static void WebUploadRTCUpdateHandler(AsyncWebServerRequest *request) {
 
   tm timeData;
   AsyncWebServerResponse *response;
-  if(!getLocalTime(&timeData)) {
+  if (!getLocalTime(&timeData))
+  {
     response = request->beginResponse(500);
   }
-  else {
+  else
+  {
     response = request->beginResponse(200, "text/plain", "RTC clock synced with NTP server.");
   }
 
@@ -440,16 +524,16 @@ static void WebUploadRTCUpdateHandler(AsyncWebServerRequest *request) {
   request->send(response);
   request->client()->close();
 
-  #if defined(TARGET_VRX_BACKPACK)
+#if defined(TARGET_VRX_BACKPACK)
   sendRTCChangesToVrx = true;
-  #endif
+#endif
 }
 
 #if defined(MAVLINK_ENABLED)
 static void WebMAVLinkHandler(AsyncWebServerRequest *request)
 {
-  mavlink_stats_t* stats = mavlink.GetMavlinkStats();
-  
+  mavlink_stats_t *stats = mavlink.GetMavlinkStats();
+
   DynamicJsonDocument json(1024);
   json["enabled"] = wifiService == WIFI_SERVICE_MAVLINK_TX;
   json["counters"]["packets_down"] = stats->packets_downlink;
@@ -458,9 +542,12 @@ static void WebMAVLinkHandler(AsyncWebServerRequest *request)
   json["counters"]["overflows_down"] = stats->overflows_downlink;
   json["ports"]["listen"] = config.GetMavlinkListenPort();
   json["ports"]["send"] = config.GetMavlinkSendPort();
-  if (gcsIPSet) {
+  if (gcsIPSet)
+  {
     json["ip"]["gcs"] = gcsIP.toString();
-  } else {
+  }
+  else
+  {
     json["ip"]["gcs"] = "IP UNSET";
   }
   json["protocol"] = "UDP";
@@ -472,31 +559,30 @@ static void WebMAVLinkHandler(AsyncWebServerRequest *request)
 
 static void WebUpdateSetMavLink(AsyncWebServerRequest *request)
 {
-    uint16_t listen_port = request->arg("listen").toInt();
-    uint16_t send_port = request->arg("send").toInt();
+  uint16_t listen_port = request->arg("listen").toInt();
+  uint16_t send_port = request->arg("send").toInt();
 
-    DBGLN("Setting MavLink configuration: listen=%d, send=%d", listen_port, send_port);
+  DBGLN("Setting MavLink configuration: listen=%d, send=%d", listen_port, send_port);
 
-    config.SetMavlinkListenPort(listen_port);
-    config.SetMavlinkSendPort(send_port);
-    config.SetWiFiService(WIFI_SERVICE_MAVLINK_TX);
-    config.Commit();
+  config.SetMavlinkListenPort(listen_port);
+  config.SetMavlinkSendPort(send_port);
+  config.SetWiFiService(WIFI_SERVICE_MAVLINK_TX);
+  config.Commit();
 
-    // Restart MavLink UDP service
-    mavlinkUDP.stop();
-    mavlinkUDP.begin(config.GetMavlinkListenPort());
+  // Restart MavLink UDP service
+  mavlinkUDP.stop();
+  mavlinkUDP.begin(config.GetMavlinkListenPort());
 
-    String response = F(
+  String response = F(
       "<html><head>"
       "<meta http-equiv='refresh' content='2;url=/'>"
       "<title>MavLink Settings Updated</title>"
       "</head><body>"
       "<h1>MavLink Settings Updated Successfully</h1>"
       "<p>Redirecting back to the main page in 2 seconds...</p>"
-      "</body></html>"
-    );
+      "</body></html>");
 
-    sendResponse(request, response, "text/html");
+  sendResponse(request, response, "text/html");
 }
 #endif
 
@@ -505,17 +591,19 @@ static void wifiOff()
   wifiStarted = false;
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  #if defined(PLATFORM_ESP8266)
+#if defined(PLATFORM_ESP8266)
   WiFi.forceSleepBegin();
-  #endif
+#endif
 }
 
 static void startWiFi(unsigned long now)
 {
-  if (wifiStarted) {
+  if (wifiStarted)
+  {
     return;
   }
-  if (connectionState < FAILURE_STATES) {
+  if (connectionState < FAILURE_STATES)
+  {
     connectionState = wifiUpdate;
   }
 
@@ -524,25 +612,29 @@ static void startWiFi(unsigned long now)
   WiFi.persistent(false);
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
-  #if defined(PLATFORM_ESP8266)
-    WiFi.setOutputPower(20.5);
-    WiFi.setPhyMode(WIFI_PHY_MODE_11N);
-  #elif defined(PLATFORM_ESP32)
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  #endif
-  if (firmwareOptions.home_wifi_ssid[0] != 0) {
+#if defined(PLATFORM_ESP8266)
+  WiFi.setOutputPower(20.5);
+  WiFi.setPhyMode(WIFI_PHY_MODE_11N);
+#elif defined(PLATFORM_ESP32)
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+#endif
+  if (firmwareOptions.home_wifi_ssid[0] != 0)
+  {
     strcpy(station_ssid, firmwareOptions.home_wifi_ssid);
     strcpy(station_password, firmwareOptions.home_wifi_password);
   }
-  else {
+  else
+  {
     strcpy(station_ssid, config.GetSSID());
     strcpy(station_password, config.GetPassword());
   }
-  if (station_ssid[0] == 0) {
+  if (station_ssid[0] == 0)
+  {
     changeTime = now;
     changeMode = WIFI_AP;
   }
-  else {
+  else
+  {
     changeTime = now;
     changeMode = WIFI_STA;
   }
@@ -560,54 +652,55 @@ static void startMDNS()
 
   String instance = String(myHostname) + "_" + WiFi.macAddress();
   instance.replace(":", "");
-  #ifdef PLATFORM_ESP8266
-    // We have to do it differently on ESP8266 as setInstanceName has the side-effect of chainging the hostname!
-    MDNS.setInstanceName(myHostname);
-    MDNSResponder::hMDNSService service = MDNS.addService(instance.c_str(), "http", "tcp", 80);
-    MDNS.addServiceTxt(service, "vendor", "elrs");
-    MDNS.addServiceTxt(service, "target", (const char *)&target_name[4]);
-    MDNS.addServiceTxt(service, "version", VERSION);
-    MDNS.addServiceTxt(service, "options", String(FPSTR(compile_options)).c_str());
-    #if defined(TARGET_VRX_BACKPACK)
-      MDNS.addServiceTxt(service, "type", "vrx");
-    #elif defined(TARGET_TX_BACKPACK)
-      MDNS.addServiceTxt(service, "type", "txbp");
-    #elif defined(TARGET_TIMER_BACKPACK)
-      MDNS.addServiceTxt(service, "type", "timer");
-    #endif
-    // If the probe result fails because there is another device on the network with the same name
-    // use our unique instance name as the hostname. A better way to do this would be to use
-    // MDNSResponder::indexDomain and change wifi_hostname as well.
-    MDNS.setHostProbeResultCallback([instance](const char* p_pcDomainName, bool p_bProbeResult) {
+#ifdef PLATFORM_ESP8266
+  // We have to do it differently on ESP8266 as setInstanceName has the side-effect of chainging the hostname!
+  MDNS.setInstanceName(myHostname);
+  MDNSResponder::hMDNSService service = MDNS.addService(instance.c_str(), "http", "tcp", 80);
+  MDNS.addServiceTxt(service, "vendor", "elrs");
+  MDNS.addServiceTxt(service, "target", (const char *)&target_name[4]);
+  MDNS.addServiceTxt(service, "version", VERSION);
+  MDNS.addServiceTxt(service, "options", String(FPSTR(compile_options)).c_str());
+#if defined(TARGET_VRX_BACKPACK)
+  MDNS.addServiceTxt(service, "type", "vrx");
+#elif defined(TARGET_TX_BACKPACK)
+  MDNS.addServiceTxt(service, "type", "txbp");
+#elif defined(TARGET_TIMER_BACKPACK)
+  MDNS.addServiceTxt(service, "type", "timer");
+#endif
+  // If the probe result fails because there is another device on the network with the same name
+  // use our unique instance name as the hostname. A better way to do this would be to use
+  // MDNSResponder::indexDomain and change wifi_hostname as well.
+  MDNS.setHostProbeResultCallback([instance](const char *p_pcDomainName, bool p_bProbeResult)
+                                  {
       if (!p_bProbeResult) {
         WiFi.hostname(instance);
         MDNS.setInstanceName(instance);
-      }
-    });
-  #else
-    MDNS.setInstanceName(instance);
-    MDNS.addService("http", "tcp", 80);
-    MDNS.addServiceTxt("http", "tcp", "vendor", "elrs");
-    MDNS.addServiceTxt("http", "tcp", "target", (const char *)&target_name[4]);
-    MDNS.addServiceTxt("http", "tcp", "version", VERSION);
-    MDNS.addServiceTxt("http", "tcp", "options", String(FPSTR(compile_options)).c_str());
-    #if defined(TARGET_VRX_BACKPACK)
-       MDNS.addServiceTxt("http", "tcp", "type", "vrx");
-    #elif defined(TARGET_TX_BACKPACK)
-       MDNS.addServiceTxt("http", "tcp", "type", "txbp");
-    #elif defined(TARGET_TIMER_BACKPACK)
-       MDNS.addServiceTxt("http", "tcp", "type", "timer");
-    #endif
-  #endif
+      } });
+#else
+  MDNS.setInstanceName(instance);
+  MDNS.addService("http", "tcp", 80);
+  MDNS.addServiceTxt("http", "tcp", "vendor", "elrs");
+  MDNS.addServiceTxt("http", "tcp", "target", (const char *)&target_name[4]);
+  MDNS.addServiceTxt("http", "tcp", "version", VERSION);
+  MDNS.addServiceTxt("http", "tcp", "options", String(FPSTR(compile_options)).c_str());
+#if defined(TARGET_VRX_BACKPACK)
+  MDNS.addServiceTxt("http", "tcp", "type", "vrx");
+#elif defined(TARGET_TX_BACKPACK)
+  MDNS.addServiceTxt("http", "tcp", "type", "txbp");
+#elif defined(TARGET_TIMER_BACKPACK)
+  MDNS.addServiceTxt("http", "tcp", "type", "timer");
+#endif
+#endif
 }
 
 static void startServices()
 {
-  if (servicesStarted) {
-    #if defined(PLATFORM_ESP32)
-      MDNS.end();
-      startMDNS();
-    #endif
+  if (servicesStarted)
+  {
+#if defined(PLATFORM_ESP32)
+    MDNS.end();
+    startMDNS();
+#endif
     return;
   }
 
@@ -620,9 +713,9 @@ static void startServices()
   server.on("/config", HTTP_GET, GetConfiguration);
   server.on("/networks.json", WebUpdateSendNetworks);
   server.on("/sethome", WebUpdateSetHome);
-  #if defined(MAVLINK_ENABLED)
+#if defined(MAVLINK_ENABLED)
   server.on("/setmavlink", WebUpdateSetMavLink);
-  #endif
+#endif
   server.on("/forget", WebUpdateForget);
   server.on("/connect", WebUpdateConnect);
   server.on("/access", WebUpdateAccessPoint);
@@ -657,6 +750,13 @@ static void startServices()
 #if defined(MAVLINK_ENABLED)
   mavlinkUDP.begin(config.GetMavlinkListenPort());
 #endif
+#if defined(TARGET_TX_BACKPACK)
+  crsfUDP.begin(CRSF_UDP_PORT);
+#if defined(PLATFORM_ESP32)
+  // 总是初始化蓝牙服务，以便可以同时发送
+  InitializeBLEService();
+#endif
+#endif
 
   servicesStarted = true;
   DBGLN("HTTPUpdateServer ready! Open http://%s.local in your browser", myHostname);
@@ -666,89 +766,93 @@ static void HandleWebUpdate()
 {
   unsigned long now = millis();
   wl_status_t status = WiFi.status();
-  if (status != laststatus && wifiMode == WIFI_STA) {
+  if (status != laststatus && wifiMode == WIFI_STA)
+  {
     DBGLN("WiFi status %d", status);
-    switch(status) {
-      case WL_NO_SSID_AVAIL:
-      case WL_CONNECT_FAILED:
-      case WL_CONNECTION_LOST:
-        changeTime = now;
-        changeMode = WIFI_AP;
-        break;
-      case WL_DISCONNECTED: // try reconnection
-        changeTime = now;
-        break;
-      default:
-        break;
+    switch (status)
+    {
+    case WL_NO_SSID_AVAIL:
+    case WL_CONNECT_FAILED:
+    case WL_CONNECTION_LOST:
+      changeTime = now;
+      changeMode = WIFI_AP;
+      break;
+    case WL_DISCONNECTED: // try reconnection
+      changeTime = now;
+      break;
+    default:
+      break;
     }
     laststatus = status;
   }
-  if (status != WL_CONNECTED && wifiMode == WIFI_STA && (now - changeTime) > 30000) {
+  if (status != WL_CONNECTED && wifiMode == WIFI_STA && (now - changeTime) > 30000)
+  {
     changeTime = now;
     changeMode = WIFI_AP;
     DBGLN("Connection failed %d", status);
   }
-  if (changeMode != wifiMode && changeMode != WIFI_OFF && (now - changeTime) > 500) {
-    switch(changeMode) {
-      case WIFI_AP:
-        DBGLN("Changing to AP mode");
-        WiFi.disconnect();
-        wifiMode = WIFI_AP;
-        #if defined(PLATFORM_ESP8266)
-          WiFi.mode(WIFI_AP_STA);
-        #else
-          WiFi.mode(WIFI_AP);
-        #endif
-        changeTime = now;
-        WiFi.softAPConfig(apIP, apIP, netMsk);
-#if defined(TARGET_TX_BACKPACK)
-        if (wifiService == WIFI_SERVICE_UPDATE)
-        {
-          strcpy(wifi_ap_ssid, "ExpressLRS TX Backpack");
-        }
-        else if (wifiService == WIFI_SERVICE_MAVLINK_TX)
-        {
-          // Generate a unique SSID using config.address as hex
-          sprintf(wifi_ap_ssid, "ExpressLRS TX Backpack %02X%02X%02X",
-            firmwareOptions.uid[3],
-            firmwareOptions.uid[4],
-            firmwareOptions.uid[5]
-          );
-        }
+  if (changeMode != wifiMode && changeMode != WIFI_OFF && (now - changeTime) > 500)
+  {
+    switch (changeMode)
+    {
+    case WIFI_AP:
+      DBGLN("Changing to AP mode");
+      WiFi.disconnect();
+      wifiMode = WIFI_AP;
+#if defined(PLATFORM_ESP8266)
+      WiFi.mode(WIFI_AP_STA);
+#else
+      WiFi.mode(WIFI_AP);
 #endif
-        WiFi.softAP(wifi_ap_ssid, wifi_ap_password);
-        WiFi.scanNetworks(true);
-        startServices();
-        #if defined(PLATFORM_ESP32)
-        esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-        #endif
-        break;
-      case WIFI_STA:
-        DBGLN("Connecting to home network '%s' '%s'", station_ssid, station_password);
-        wifiMode = WIFI_STA;
-        WiFi.mode(wifiMode);
-        WiFi.setHostname(myHostname); // hostname must be set after the mode is set to STA
-        changeTime = now;
-        WiFi.begin(station_ssid, station_password);
-        startServices();
-      default:
-        break;
+      changeTime = now;
+      WiFi.softAPConfig(apIP, apIP, netMsk);
+#if defined(TARGET_TX_BACKPACK)
+      if (wifiService == WIFI_SERVICE_UPDATE)
+      {
+        strcpy(wifi_ap_ssid, "ExpressLRS TX Backpack");
+      }
+      else if (wifiService == WIFI_SERVICE_MAVLINK_TX)
+      {
+        // Generate a unique SSID using config.address as hex
+        sprintf(wifi_ap_ssid, "ExpressLRS TX Backpack %02X%02X%02X",
+                firmwareOptions.uid[3],
+                firmwareOptions.uid[4],
+                firmwareOptions.uid[5]);
+      }
+#endif
+      WiFi.softAP(wifi_ap_ssid, wifi_ap_password);
+      WiFi.scanNetworks(true);
+      startServices();
+#if defined(PLATFORM_ESP32)
+      esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+#endif
+      break;
+    case WIFI_STA:
+      DBGLN("Connecting to home network '%s' '%s'", station_ssid, station_password);
+      wifiMode = WIFI_STA;
+      WiFi.mode(wifiMode);
+      WiFi.setHostname(myHostname); // hostname must be set after the mode is set to STA
+      changeTime = now;
+      WiFi.begin(station_ssid, station_password);
+      startServices();
+    default:
+      break;
     }
-    #if defined(PLATFORM_ESP8266)
-      MDNS.notifyAPChange();
-    #endif
+#if defined(PLATFORM_ESP8266)
+    MDNS.notifyAPChange();
+#endif
     changeMode = WIFI_OFF;
   }
 
   if (servicesStarted)
   {
-  #if defined(MAVLINK_ENABLED)
+#if defined(MAVLINK_ENABLED)
     if (wifiService == WIFI_SERVICE_MAVLINK_TX)
     {
       // Dump the mavlink_to_gcs_buf to the GCS
       static unsigned long last_mavlink_to_gcs_dump = 0;
 
-      bool thresholdExceeded = mavlink.GetQueuedMsgCount() > MAVLINK_BUF_THRESHOLD; // msg queue is full enough
+      bool thresholdExceeded = mavlink.GetQueuedMsgCount() > MAVLINK_BUF_THRESHOLD;                                          // msg queue is full enough
       bool timeoutExceeded = mavlink.GetQueuedMsgCount() > 0 && (millis() - last_mavlink_to_gcs_dump) > MAVLINK_BUF_TIMEOUT; // queue hasn't been flushed in a while
       if (thresholdExceeded || timeoutExceeded)
       {
@@ -772,7 +876,7 @@ static void HandleWebUpdate()
         }
 
         mavlinkUDP.beginPacket(remote, config.GetMavlinkSendPort());
-        mavlink_message_t* msgQueue = mavlink.GetQueuedMsgs();
+        mavlink_message_t *msgQueue = mavlink.GetQueuedMsgs();
         for (uint8_t i = 0; i < mavlink.GetQueuedMsgCount(); i++)
         {
           uint8_t buf[MAVLINK_MAX_PACKET_LEN];
@@ -802,12 +906,19 @@ static void HandleWebUpdate()
         }
       }
     }
-  #endif
+#endif
+
+#if defined(PLATFORM_ESP32) && defined(TARGET_TX_BACKPACK)
+    // 处理BLE事件
+    if (bleInitialized) {
+      HandleBLEEvents();
+    }
+#endif
 
     dnsServer.processNextRequest();
-    #if defined(PLATFORM_ESP8266)
-      MDNS.update();
-    #endif
+#if defined(PLATFORM_ESP8266)
+    MDNS.update();
+#endif
     // When in STA mode, a small delay reduces power use from 90mA to 30mA when idle
     // In AP mode, it doesn't seem to make a measurable difference, but does not hurt
 #if defined(MAVLINK_ENABLED)
@@ -816,11 +927,15 @@ static void HandleWebUpdate()
     if (!updater.isRunning())
 #endif
       delay(1);
-    if (do_flash) {
+    if (do_flash)
+    {
       do_flash = false;
-      if (updater.end(true)) { //true to set the size to the current progress
+      if (updater.end(true))
+      { // true to set the size to the current progress
         DBGLN("Upload Success: %ubytes\nPlease wait for LED to turn on before disconnecting power", totalSize);
-      } else {
+      }
+      else
+      {
         updater.printError(Serial);
       }
       rebootTime = millis() + 200;
@@ -837,7 +952,8 @@ static int event()
 {
   if (connectionState == wifiUpdate || connectionState > FAILURE_STATES)
   {
-    if (!wifiStarted) {
+    if (!wifiStarted)
+    {
       startWiFi(millis());
       return DURATION_IMMEDIATELY;
     }
@@ -856,10 +972,121 @@ static int timeout()
 }
 
 device_t WIFI_device = {
-  .initialize = wifiOff,
-  .start = start,
-  .event = event,
-  .timeout = timeout
-};
+    .initialize = wifiOff,
+    .start = start,
+    .event = event,
+    .timeout = timeout};
+
+#if defined(TARGET_TX_BACKPACK)
+#if defined(PLATFORM_ESP32)
+bool InitializeBLEService()
+{
+  if (bleInitialized)
+  {
+    return true;
+  }
+  
+  // 创建BLE设备
+  BLEDevice::init(BLE_DEVICE_NAME);
+  
+  // 创建BLE服务器
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  
+  // 创建BLE服务
+  BLEService *pService = pServer->createService(CRSF_SERVICE_UUID);
+  
+  // 创建BLE特征
+  pCharacteristic = pService->createCharacteristic(
+                      CRSF_CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_READ |
+                      BLECharacteristic::PROPERTY_WRITE |
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+  
+  // 添加描述符
+  pCharacteristic->addDescriptor(new BLE2902());
+  
+  // 启动服务
+  pService->start();
+  
+  // 开始广播
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(CRSF_SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);  // 设置为非连接广播模式
+  BLEDevice::startAdvertising();
+  
+  DBGLN("BLE服务初始化成功: %s", BLE_DEVICE_NAME);
+  bleInitialized = true;
+  return true;
+}
+
+void HandleBLEEvents()
+{
+  // 处理设备连接/断开的情况
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500); // 给蓝牙堆栈时间处理断开连接事件
+    pServer->startAdvertising(); // 重新开始广播
+    DBGLN("BLE广播已重启");
+    oldDeviceConnected = deviceConnected;
+  }
+  
+  // 连接状态改变
+  if (deviceConnected && !oldDeviceConnected) {
+    oldDeviceConnected = deviceConnected;
+  }
+}
+
+void SendCRSFTelemetryOverBLE(const uint8_t *payload, uint8_t length)
+{
+  if (!bleInitialized)
+  {
+    InitializeBLEService();
+    if (!bleInitialized)
+      return;
+  }
+  
+  if (deviceConnected) {
+    pCharacteristic->setValue((uint8_t*)payload, length);
+    pCharacteristic->notify();
+    DBGLN("CRSF遥测数据通过BLE发送: %d字节", length);
+  }
+}
+#endif
+
+void SendCRSFTelemetryOverUDP(const uint8_t *payload, uint8_t length)
+{
+  if (!wifiStarted || wifiMode == WIFI_OFF)
+  {
+    return;
+  }
+
+  // 获取远程IP地址，类似于MAVLink处理方式
+  IPAddress remote;
+
+  // 如果已经知道目标IP，使用它
+  if (crsfIPSet)
+  {
+    remote = crsfRemoteIP;
+  }
+  // 如果是AP模式，则广播到AP子网
+  else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)
+  {
+    remote = apBroadcast;
+  }
+  // 否则广播到station子网
+  else
+  {
+    remote = WiFi.broadcastIP();
+  }
+
+  crsfUDP.beginPacket(remote, CRSF_UDP_PORT);
+  size_t sent = crsfUDP.write(payload, length);
+  crsfUDP.endPacket();
+
+  DBGLN("CRSF telemetry sent via UDP: %d bytes", sent);
+}
+#endif
 
 #endif

@@ -236,7 +236,18 @@ void ProcessMSPPacketFromTX(mspPacket_t *packet)
     DBGLN("Processing MSP_ELRS_BACKPACK_CRSF_TLM...");
     if (config.GetTelemMode() != BACKPACK_TELEM_MODE_OFF)
     {
+      // 同时使用多种方式发送CRSF遥测数据
+      
+      // 通过ESP-NOW发送
       sendMSPViaEspnow(packet);
+      
+      // 通过UDP发送
+      SendCRSFTelemetryOverUDP(packet->payload, packet->payloadSize);
+      
+      // 通过蓝牙发送 (仅ESP32平台)
+      #if defined(PLATFORM_ESP32)
+      SendCRSFTelemetryOverBLE(packet->payload, packet->payloadSize);
+      #endif
     }
     break;
   case MSP_ELRS_BACKPACK_CONFIG:
