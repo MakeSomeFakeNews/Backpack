@@ -239,7 +239,6 @@ void ProcessMSPPacketFromTX(mspPacket_t *packet)
       // 同时使用多种方式发送CRSF遥测数据
       
       // 通过ESP-NOW发送
-      sendMSPViaEspnow(packet);
       
       // 通过UDP发送
       SendCRSFTelemetryOverUDP(packet->payload, packet->payloadSize);
