@@ -405,7 +405,7 @@ void initBLE() {
   // 创建BLE服务器
   pServer = BLEDevice::createServer();
   if (pServer == nullptr) {
-    DBGLN("Failed to create BLE server");
+    DBGLN("Failed to create BLE server ");
     return;
   }
   pServer->setCallbacks(new MyServerCallbacks());
