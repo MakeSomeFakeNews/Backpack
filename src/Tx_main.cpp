@@ -1,16 +1,12 @@
 #include <Arduino.h>
 
 #if defined(PLATFORM_ESP8266)
-  #include <espnow.h>
-  #include <ESP8266WiFi.h>
+#include <espnow.h>
+#include <ESP8266WiFi.h>
 #elif defined(PLATFORM_ESP32)
-  #include <esp_now.h>
-  #include <esp_wifi.h>
-  #include <WiFi.h>
-  #include <BLEDevice.h>
-  #include <BLEServer.h>
-  #include <BLEUtils.h>
-  #include <BLE2902.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+#include <WiFi.h>
 #endif
 
 #include "msp.h"
@@ -25,6 +21,10 @@
 #include "devWIFI.h"
 #include "devButton.h"
 #include "devLED.h"
+
+#if defined(PLATFORM_ESP32)
+#include "devBLE.h"
+#endif
 
 #if defined(MAVLINK_ENABLED)
 #include <MAVLink.h>
@@ -44,55 +44,17 @@ unsigned long rebootTime = 0;
 bool cacheFull = false;
 bool sendCached = false;
 
-#if defined(PLATFORM_ESP32)
-// BLE相关变量
-BLEServer* pServer = nullptr;
-BLECharacteristic* pTxCharacteristic = nullptr;
-BLECharacteristic* pRxCharacteristic = nullptr;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-
-// BLE服务和特征值UUID - 使用Nordic UART Service标准
-#define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-#define CHARACTERISTIC_RX_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-#define CHARACTERISTIC_TX_UUID "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-      DBGLN("BLE device connected");
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-      DBGLN("BLE device disconnected");
-    }
-};
-
-class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      if (!pCharacteristic) return;
-      
-      std::string rxValue = pCharacteristic->getValue();
-      
-      if (rxValue.length() > 0) {
-        // 处理接收到的BLE数据
-        for (size_t i = 0; i < rxValue.length(); i++) {
-          DBGLN("Received BLE data: " + String((uint8_t)rxValue[i], HEX));
-        }
-      }
-    }
-};
-#endif
-
 device_t *ui_devices[] = {
 #ifdef PIN_LED
-  &LED_device,
+    &LED_device,
 #endif
 #ifdef PIN_BUTTON
-  &Button_device,
+    &Button_device,
 #endif
-  &WIFI_device,
+    &WIFI_device,
+#if defined(PLATFORM_ESP32)
+    &BLET_device,
+#endif
 };
 
 /////////// CLASS OBJECTS ///////////
@@ -109,10 +71,6 @@ MAVLink mavlink;
 /////////// FUNCTION DEFS ///////////
 
 void sendMSPViaEspnow(mspPacket_t *packet);
-#if defined(PLATFORM_ESP32)
-void initBLE();
-void sendViaBLE(mspPacket_t *packet);
-#endif
 
 /////////////////////////////////////
 
@@ -137,38 +95,42 @@ void RebootIntoWifi(wifi_service_t service = WIFI_SERVICE_UPDATE)
 
 void ProcessMSPPacketFromPeer(mspPacket_t *packet)
 {
-  switch (packet->function) {
-    case MSP_ELRS_REQU_VTX_PKT: {
-      DBGLN("MSP_ELRS_REQU_VTX_PKT...");
-      // request from the vrx-backpack to send cached VTX packet
-      if (cacheFull)
-      {
-        sendCached = true;
-      }
-      break;
+  switch (packet->function)
+  {
+  case MSP_ELRS_REQU_VTX_PKT:
+  {
+    DBGLN("MSP_ELRS_REQU_VTX_PKT...");
+    // request from the vrx-backpack to send cached VTX packet
+    if (cacheFull)
+    {
+      sendCached = true;
     }
-    case MSP_ELRS_BACKPACK_SET_PTR: {
-      DBGLN("MSP_ELRS_BACKPACK_SET_PTR...");
-      msp.sendPacket(packet, &Serial);
-      break;
-    }
-    case MSP_SET_VTX_CONFIG: {
-      DBGLN("MSP_SET_VTX_CONFIG...");
-      msp.sendPacket(packet, &Serial);
-      break;
-    }
+    break;
+  }
+  case MSP_ELRS_BACKPACK_SET_PTR:
+  {
+    DBGLN("MSP_ELRS_BACKPACK_SET_PTR...");
+    msp.sendPacket(packet, &Serial);
+    break;
+  }
+  case MSP_SET_VTX_CONFIG:
+  {
+    DBGLN("MSP_SET_VTX_CONFIG...");
+    msp.sendPacket(packet, &Serial);
+    break;
+  }
   }
 }
 
 // espnow on-receive callback
 #if defined(PLATFORM_ESP8266)
-void OnDataRecv(uint8_t * mac_addr, uint8_t *data, uint8_t data_len)
+void OnDataRecv(uint8_t *mac_addr, uint8_t *data, uint8_t data_len)
 #elif defined(PLATFORM_ESP32)
-void OnDataRecv(const uint8_t * mac_addr, const uint8_t *data, int data_len)
+void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 #endif
 {
   DBGLN("ESP NOW DATA:");
-  for(int i = 0; i < data_len; i++)
+  for (int i = 0; i < data_len; i++)
   {
     if (msp.processReceivedByte(data[i]))
     {
@@ -195,7 +157,7 @@ void SendVersionResponse()
   out.reset();
   out.makeResponse();
   out.function = MSP_ELRS_GET_BACKPACK_VERSION;
-  for (size_t i = 0 ; i < sizeof(version) ; i++)
+  for (size_t i = 0; i < sizeof(version); i++)
   {
     out.addByte(version[i]);
   }
@@ -208,30 +170,30 @@ void HandleConfigMsg(mspPacket_t *packet)
   uint8_t value = packet->readByte();
   switch (key)
   {
-    case MSP_ELRS_BACKPACK_CONFIG_TLM_MODE:
-      switch (value)
-      {
-        case BACKPACK_TELEM_MODE_OFF:
-          config.SetTelemMode(BACKPACK_TELEM_MODE_OFF);
-          config.SetWiFiService(WIFI_SERVICE_UPDATE);
-          config.SetStartWiFiOnBoot(false);
-          config.Commit();
-          break;
-        case BACKPACK_TELEM_MODE_ESPNOW:
-          config.SetTelemMode(BACKPACK_TELEM_MODE_ESPNOW);
-          config.SetWiFiService(WIFI_SERVICE_UPDATE);
-          config.SetStartWiFiOnBoot(false);
-          config.Commit();
-          break;
-        case BACKPACK_TELEM_MODE_WIFI:
-          config.SetTelemMode(BACKPACK_TELEM_MODE_WIFI);
-          config.SetWiFiService(WIFI_SERVICE_MAVLINK_TX);
-          config.SetStartWiFiOnBoot(true);
-          config.Commit();
-          break;
-      }
-      rebootTime = millis();
+  case MSP_ELRS_BACKPACK_CONFIG_TLM_MODE:
+    switch (value)
+    {
+    case BACKPACK_TELEM_MODE_OFF:
+      config.SetTelemMode(BACKPACK_TELEM_MODE_OFF);
+      config.SetWiFiService(WIFI_SERVICE_UPDATE);
+      config.SetStartWiFiOnBoot(false);
+      config.Commit();
       break;
+    case BACKPACK_TELEM_MODE_ESPNOW:
+      config.SetTelemMode(BACKPACK_TELEM_MODE_ESPNOW);
+      config.SetWiFiService(WIFI_SERVICE_UPDATE);
+      config.SetStartWiFiOnBoot(false);
+      config.Commit();
+      break;
+    case BACKPACK_TELEM_MODE_WIFI:
+      config.SetTelemMode(BACKPACK_TELEM_MODE_WIFI);
+      config.SetWiFiService(WIFI_SERVICE_MAVLINK_TX);
+      config.SetStartWiFiOnBoot(true);
+      config.Commit();
+      break;
+    }
+    rebootTime = millis();
+    break;
   }
 }
 
@@ -282,16 +244,16 @@ void ProcessMSPPacketFromTX(mspPacket_t *packet)
     sendMSPViaEspnow(packet);
     break;
   case MSP_ELRS_BACKPACK_CRSF_TLM:
-    DBGLN("Processing MSP_ELRS_BACKPACK_CRSF_TLM...");
+  {
+
+#if defined(PLATFORM_ESP32)
     if (config.GetTelemMode() != BACKPACK_TELEM_MODE_OFF)
     {
-      sendMSPViaEspnow(packet);
+      BluetoothTelemetryUpdateValues(packet->payload, packet->payloadSize);
     }
-#if defined(PLATFORM_ESP32)
-    // 通过BLE发送CRSF遥测数据
-    sendViaBLE(packet);
 #endif
     break;
+  }
   case MSP_ELRS_BACKPACK_CONFIG:
     DBGLN("Processing MSP_ELRS_BACKPACK_CONFIG...");
     HandleConfigMsg(packet);
@@ -318,11 +280,11 @@ void sendMSPViaEspnow(mspPacket_t *packet)
 
   if (packet->function == MSP_ELRS_BIND)
   {
-    esp_now_send(bindingAddress, (uint8_t *) &nowDataOutput, packetSize); // Send Bind packet with the broadcast address
+    esp_now_send(bindingAddress, (uint8_t *)&nowDataOutput, packetSize); // Send Bind packet with the broadcast address
   }
   else
   {
-    esp_now_send(firmwareOptions.uid, (uint8_t *) &nowDataOutput, packetSize);
+    esp_now_send(firmwareOptions.uid, (uint8_t *)&nowDataOutput, packetSize);
   }
 
   blinkLED();
@@ -364,147 +326,46 @@ void SetSoftMACAddress()
   firmwareOptions.uid[0] = firmwareOptions.uid[0] & ~0x01;
 
   WiFi.mode(WIFI_STA);
-  #if defined(PLATFORM_ESP8266)
-    WiFi.setOutputPower(20.5);
-  #elif defined(PLATFORM_ESP32)
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
-  #endif
+#if defined(PLATFORM_ESP8266)
+  WiFi.setOutputPower(20.5);
+#elif defined(PLATFORM_ESP32)
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+#endif
   WiFi.begin("network-name", "pass-to-network", 1);
   WiFi.disconnect();
 
-  // Soft-set the MAC address to the passphrase UID for binding
-  #if defined(PLATFORM_ESP8266)
-    wifi_set_macaddr(STATION_IF, firmwareOptions.uid);
-  #elif defined(PLATFORM_ESP32)
-    esp_wifi_set_mac(WIFI_IF_STA, firmwareOptions.uid);
-  #endif
-}
-
-#if defined(PLATFORM_ESP32)
-void initBLE() {
-  DBGLN("Starting BLE initialization...");
-  
-  String deviceName = "RunCam-";
-  uint8_t mac[6];
-  esp_efuse_mac_get_default(mac);
-  
-  char suffix[6];
-  snprintf(suffix, sizeof(suffix), "%02X%02X%01X", 
-           mac[3], mac[4], (mac[5] >> 4) & 0x0F);
-  deviceName += suffix;
-  
-  DBGLN("Initializing BLE device: " + deviceName);
-  
-  // 初始化BLE设备
-  BLEDevice::init(deviceName.c_str());
-  
-  // 设置BLE功率为最大
-  BLEDevice::setPower(ESP_PWR_LVL_P9);
-  
-  // 创建BLE服务器
-  pServer = BLEDevice::createServer();
-  if (pServer == nullptr) {
-    DBGLN("Failed to create BLE server ");
-    return;
-  }
-  pServer->setCallbacks(new MyServerCallbacks());
-  
-  // 创建BLE服务
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-  if (pService == nullptr) {
-    DBGLN("Failed to create BLE service");
-    return;
-  }
-  
-  // 创建TX特征值
-  pTxCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_TX_UUID,
-                      BLECharacteristic::PROPERTY_NOTIFY
-                    );
-  
-  if (pTxCharacteristic == nullptr) {
-    DBGLN("Failed to create TX characteristic");
-    return;
-  }
-  pTxCharacteristic->addDescriptor(new BLE2902());
-  
-  // 创建RX特征值
-  pRxCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_RX_UUID,
-                      BLECharacteristic::PROPERTY_WRITE
-                    );
-  
-  if (pRxCharacteristic == nullptr) {
-    DBGLN("Failed to create RX characteristic");
-    return;
-  }
-  pRxCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
-  
-  // 启动服务
-  pService->start();
-  DBGLN("BLE service started");
-  
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  if (pAdvertising) {
-    pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);  
-    pAdvertising->setMaxPreferred(0x12);
-    BLEDevice::startAdvertising();
-    DBGLN("BLE device started advertising successfully");
-  }
-}
-
-void sendViaBLE(mspPacket_t *packet) {
-  if (!deviceConnected || pTxCharacteristic == nullptr || packet == nullptr) {
-    return;
-  }
-  
-  // 分块发送大数据包
-  const size_t MAX_BLE_PAYLOAD_SIZE = 20;
-  size_t offset = 0;
-  
-  while (offset < packet->payloadSize) {
-    size_t chunkSize = min(packet->payloadSize - offset, MAX_BLE_PAYLOAD_SIZE);
-    
-    pTxCharacteristic->setValue(packet->payload + offset, chunkSize);
-    pTxCharacteristic->notify();
-    
-    offset += chunkSize;
-    
-    if (offset < packet->payloadSize) {
-      delay(10); // 短暂延迟避免数据丢失
-    }
-  }
-  
-  DBGLN("Sent MSP packet via BLE");
-}
+// Soft-set the MAC address to the passphrase UID for binding
+#if defined(PLATFORM_ESP8266)
+  wifi_set_macaddr(STATION_IF, firmwareOptions.uid);
+#elif defined(PLATFORM_ESP32)
+  esp_wifi_set_mac(WIFI_IF_STA, firmwareOptions.uid);
 #endif
+}
 
 #if defined(PLATFORM_ESP8266)
 // Called from core's user_rf_pre_init() function (which is called by SDK) before setup()
 RF_PRE_INIT()
 {
-    // Set whether the chip will do RF calibration or not when power up.
-    // I believe the Arduino core fakes this (byte 114 of phy_init_data.bin)
-    // to be 1, but the TX power calibration can pull over 300mA which can
-    // lock up receivers built with a underspeced LDO (such as the EP2 "SDG")
-    // Option 2 is just VDD33 measurement
-    #if defined(RF_CAL_MODE)
-    system_phy_set_powerup_option(RF_CAL_MODE);
-    #else
-    system_phy_set_powerup_option(2);
-    #endif
+// Set whether the chip will do RF calibration or not when power up.
+// I believe the Arduino core fakes this (byte 114 of phy_init_data.bin)
+// to be 1, but the TX power calibration can pull over 300mA which can
+// lock up receivers built with a underspeced LDO (such as the EP2 "SDG")
+// Option 2 is just VDD33 measurement
+#if defined(RF_CAL_MODE)
+  system_phy_set_powerup_option(RF_CAL_MODE);
+#else
+  system_phy_set_powerup_option(2);
+#endif
 }
 #endif
 
 void setup()
 {
-  #ifdef DEBUG_LOG
-    Serial1.begin(115200);
-    Serial1.setDebugOutput(true);
-  #endif
+#ifdef DEBUG_LOG
+  Serial1.begin(115200);
+  Serial1.setDebugOutput(true);
+#endif
   Serial.begin(460800);
   Serial.setRxBufferSize(4096);
 
@@ -516,15 +377,10 @@ void setup()
 
   devicesInit(ui_devices, ARRAY_SIZE(ui_devices));
 
-  #ifdef DEBUG_ELRS_WIFI
-    config.SetStartWiFiOnBoot(true);
-  #endif
-
-#if defined(PLATFORM_ESP32)
-  initBLE();
+#ifdef DEBUG_ELRS_WIFI
+  config.SetStartWiFiOnBoot(true);
 #endif
 
-  
   if (config.GetStartWiFiOnBoot())
   {
     wifiService = config.GetWiFiService();
@@ -535,10 +391,6 @@ void setup()
     }
     connectionState = wifiUpdate;
     devicesTriggerEvent();
-    
-#if defined(PLATFORM_ESP32)
-    DBGLN("WiFi mode enabled, BLE initialization already completed");
-#endif
   }
   else
   {
@@ -550,19 +402,19 @@ void setup()
       rebootTime = millis();
     }
 
-    #if defined(PLATFORM_ESP8266)
-      esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-      esp_now_add_peer(firmwareOptions.uid, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
-    #elif defined(PLATFORM_ESP32)
-      memcpy(peerInfo.peer_addr, firmwareOptions.uid, 6);
-      peerInfo.channel = 0;
-      peerInfo.encrypt = false;
-      if (esp_now_add_peer(&peerInfo) != ESP_OK)
-      {
-        DBGLN("ESP-NOW failed to add peer");
-        return;
-      }
-    #endif
+#if defined(PLATFORM_ESP8266)
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+    esp_now_add_peer(firmwareOptions.uid, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+#elif defined(PLATFORM_ESP32)
+    memcpy(peerInfo.peer_addr, firmwareOptions.uid, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) != ESP_OK)
+    {
+      DBGLN("ESP-NOW failed to add peer");
+      return;
+    }
+#endif
 
     esp_now_register_recv_cb(OnDataRecv);
   }
@@ -581,12 +433,13 @@ void loop()
 
   devicesUpdate(now);
 
-  #if defined(PLATFORM_ESP8266) || defined(PLATFORM_ESP32)
-    // If the reboot time is set and the current time is past the reboot time then reboot.
-    if (rebootTime != 0 && now > rebootTime) {
-      ESP.restart();
-    }
-  #endif
+#if defined(PLATFORM_ESP8266) || defined(PLATFORM_ESP32)
+  // If the reboot time is set and the current time is past the reboot time then reboot.
+  if (rebootTime != 0 && now > rebootTime)
+  {
+    ESP.restart();
+  }
+#endif
 
   if (Serial.available())
   {
@@ -600,10 +453,10 @@ void loop()
       msp.markPacketReceived();
     }
 
-  #if defined(MAVLINK_ENABLED)
+#if defined(MAVLINK_ENABLED)
     // Try to parse MAVLink packets from the TX
     mavlink.ProcessMAVLinkFromTX(c);
-  #endif
+#endif
   }
 
   if (cacheFull && sendCached)
@@ -611,16 +464,4 @@ void loop()
     SendCachedMSP();
     sendCached = false;
   }
-
-#if defined(PLATFORM_ESP32)
-  // 处理BLE连接状态变化，在主循环中重新开始广播
-  if (deviceConnected != oldDeviceConnected) {
-    if (!deviceConnected && pServer != nullptr) {
-      delay(500); // 等待断开连接完成
-      pServer->startAdvertising();
-      DBGLN("BLE restarted advertising after disconnect");
-    }
-    oldDeviceConnected = deviceConnected;
-  }
-#endif
 }
